@@ -8,6 +8,10 @@ from keras import initializers
 from keras.layers.pooling import MaxPooling2D
 from keras.layers import Dense, Input, Embedding, Dropout, Activation
 from keras.layers.merge import concatenate
+from keras.layers.core import Flatten, Dropout, Dense
+from keras import metrics
+
+from sklearn import preprocessing
 
 BASE_DIR = 
 EMBEDDING_FILE = BASE_DIR + 'glove.840B.300d.txt'
@@ -16,6 +20,9 @@ MAX_NB_WORDS = 200000
 EMBEDDING_DIM = 300
 NUM_FILTERS = 128
 KERNEL_SIZES = [3, 4, 5]
+DROPOUT_RATE = 0.5
+TEST_SPLIT = 0.2
+
 def extract(i):
     tree= ET.parse('/resources/data/XML/%s.xml' %i)
     meta_data= tree.findall("./head/meta")
@@ -76,26 +83,37 @@ def text_to_wordlist(text, remove_stopwords=False, stem_words=False):
     
     # Return a list of words
     return(text)
+
+def get_labels(dictionary):
+    label_list = dictionary['general_descriptor'].append(dictionary['online_sections'])
+    return '-'.join(x for x in label_list)
+
 ########################################
 ## load text and transfer to sequences
 ########################################
 alltext = []
+alllabels = []
 while(1):
     dictionary = extract(i)
     text= text_to_wordlist(dictionary['lead_paragraph'])
+    labels = get_labels(dictionary)
     alltext.append(text)
-
+    alllabels.append(labels)
 tokenizer = Tokenizer(num_words=MAX_NB_WORDS)
 tokenizer.fit_on_texts(alltext)
+
+NUM_CLASSES = set(alllabels)
+le = preprocessing.LabelEncoder()
+le.fit(alllabels)
+lables= le.transform(alllabels).tolist()
 
 sequences = tokenizer.texts_to_sequences(alltext)
 word_index = tokenizer.word_index
 print('Found %s unique tokens' % len(word_index))
 
 data = pad_sequences(sequences, maxlen=MAX_SEQUENCE_LENGTH)
-labels = np.array(labels)
-print('Shape of data tensor:', data_1.shape)
-print('Shape of label tensor:', labels.shape)
+print('Shape of data tensor:', train_data.shape)
+print('Shape of label tensor:', train_labels.shape)
 ########################################
 ## index word vectors
 ########################################
@@ -143,13 +161,17 @@ convolution_layer3 = Conv2D(filters = num_filters, kernel_size = [KERNEL_SIZES[2
                            bias_initializer = initializers.Constant(value=0.1), kernel_initializer = initializer.TruncatedNormal(mean=0.0, stddev=0.1, seed=None))
 ## the input shape of Conv2D
 ## (samples, channels, rows, cols)
+
 pool_layer = MaxPooling2D(pool_size=(MAX_SEQUENCE_LENGTH-kernel_size+1,1), strides=(1,1), padding='VALID', data_format='channels_first')
 ## the input shape of MaxPooling2D
 ## (batch_size, channels, rows, cols)
+dropout_layer = Dropout(DROPOUT_RATE)
 
+Dense_layer = Dense(NUM_CLASSES, activation = 'softmax')
 
 sequence_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
 embedded_sequences = embedding_layer(sequence_input)
+
 conv_seq1 = convolution_layer(embedded_sequences)
 conv_seq2 = convolution_layer(embedded_sequences)
 conv_seq3 = convolution_layer(embedded_sequences)
@@ -159,11 +181,36 @@ pooled2 = pool_layer(conv_seq2)
 pooled3 = pool_layer(conv_seq3)
 
 pooled = concatenate([pooled1, pooled2, pooled3])
+pooled_flat = Flatten(pooled)
 
+out_drop = dropout_layer(pooled_flat)
 
+score = Dense_layer(out_drop)
 
+########################################
+## sample train/validation data
+########################################
+perm = np.random.permutation(len(data_1))
+idx_train = perm[:int(len(data_1)*(1-TEST_SPLIT))]
+idx_test = perm[int(len(data_1)*(1-TEST_SPLIT)):]
 
+train_data = data[idx_train]
+test_data = data[idx_test]
+train_labels = labels[idx_train]
+test_labels = labels[idx_test]
+########################################
+## train the model
+########################################
+model = Model(inputs= sequence_input, outputs= score)
+sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+model.compile(loss='categorical_crossentropy',
+        optimizer= sgd,
+        metrics= ['accuracy'])
 
+hist = model.fit(train_data, train_labels, validation_split= 0.2, \
+        epochs=100, batch_size=10, shuffle=True)
+
+test_score = model.evaluate(x_test, y_test, batch_size=10)
 
 
 
